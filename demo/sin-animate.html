@@ -65,7 +65,7 @@
 			var moveTime = timestamp - startedAt;
 
 			if (moveTime < moveDuration) {
-				// New postition and velosity
+				// New position and velocity
 				x = x2 + A * (Math.cos(omega * (moveTime - moveDuration)) - 1);
 				v = A * omega * (Math.sin(omega * (moveDuration - moveTime)));
 
@@ -151,7 +151,7 @@
 				}
 
 				/**
-				 * After approximate value of k is determined, we redefine alpha
+				 * After the approximate value of k is determined, we redefine alpha
 				 * since its value affects the animation. It means that the total
 				 * animation duration (moveDuration) differs from animationTime.
 				 * However, the difference does not impact the user experience.
@@ -228,7 +228,17 @@
 
 			set_translate(movingBlock, x, y);
 			animatorX.setPos(x);
-			animatorY.setPos(y /*+ 64*/);
+			animatorY.setPos(y);
+		};
+
+		document.ontouchmove = function(e) {
+			var x = e.touches[0].pageX,
+				y = e.touches[0].pageY;
+
+			set_translate(movingBlock, x, y);
+			animatorX.setPos(x);
+			animatorY.setPos(y);
+			event.preventDefault();
 		};
 	})();
 	</script>
