@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Удаление объектов по маске</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        canvas {
+            margin: 0;
+            border: 1px solid black;
+            cursor: crosshair;
+        }
+
+        input, button, label {
+            margin: 10px;
+        }
+        .editor {
+            display: flex;
+        }
+        .editor .editor-panel {
+            flex: 0 0 50%;
+            position: relative;
+        }
+        #maskCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #cursorIndicator {
+            position: absolute;
+            pointer-events: none;
+            border: 1px solid red;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+<h1>Удаление объектов по маске</h1>
+
+<div class="toolbar">
+    Исходник: <input type="file" id="imageUpload" accept="image/*"/><br>
+    Инструмент:
+    <select id="tool">
+        <option value="brush">Кисть</option>
+        <option value="eraser">Ластик</option>
+    </select>
+    Размер кисти: <input type="range" min="1" max="50" value="10" id="brushSize"><br>
+    Резкость: <input type="range" min="1" max="20" value="2" id="degree">
+    <button id="processButton">Удалить объект</button>
+</div>
+<div class="editor">
+    <div class="editor-panel">
+        <canvas id="imageCanvas"></canvas>
+        <canvas id="maskCanvas"></canvas>
+        <div id="cursorIndicator"></div>
+    </div>
+    <div class="editor-panel">
+        <canvas id="resultCanvas"></canvas>
+    </div>
+</div>
+
+<script>
+    const imageUpload = document.getElementById('imageUpload');
+    const imageCanvas = document.getElementById('imageCanvas');
+    const maskCanvas = document.getElementById('maskCanvas');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const processButton = document.getElementById('processButton');
+    const degree = document.getElementById('degree');
+    const tool = document.getElementById('tool');
+    const brushSize = document.getElementById('brushSize');
+    const cursorIndicator = document.getElementById('cursorIndicator');
+
+    let image = null;
+
+    imageUpload.addEventListener('change', function () {
+        loadImage(imageUpload.files[0], imageCanvas, () => {
+            // Инициализируем маску
+            maskCanvas.width = imageCanvas.width;
+            maskCanvas.height = imageCanvas.height;
+            const maskCtx = maskCanvas.getContext('2d');
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            maskCtx.fillStyle = 'rgba(0,0,0,0)';
+            maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+            updateResult();
+        });
+    });
+
+    function loadImage(file, canvas, callback) {
+        const reader = new FileReader();
+        reader.onload = function (event) {
+            const img = new Image();
+            img.onload = function () {
+                const ctx = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                image = img;
+                callback && callback();
+            };
+            img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function isBlack(maskDataArray, x, y, width) {
+        const i = (y * width + x) * 4;
+        const red = maskDataArray[i];
+        const green = maskDataArray[i + 1];
+        const blue = maskDataArray[i + 2];
+        const alpha = maskDataArray[i + 3];
+        return red < 128 && green < 128 && blue < 128 && alpha > 0;
+    }
+
+    processButton.addEventListener('click', updateResult);
+
+    function updateResult() {
+        if (!image) return;
+
+        const imageCtx = imageCanvas.getContext('2d');
+        const maskCtx = maskCanvas.getContext('2d');
+        const resultCtx = resultCanvas.getContext('2d');
+
+        const imageData = imageCtx.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
+        const maskData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+        const resultData = resultCtx.createImageData(imageData);
+        const degreeValue = parseInt(degree.value);
+
+        const data = imageData.data;
+        const maskDataArray = maskData.data;
+        const resultDataArray = resultData.data;
+
+        const boundaryPixels = findBoundaryPixels(maskDataArray, maskCanvas.width, maskCanvas.height);
+
+        for (let y = 0; y < maskCanvas.height; y++) {
+            for (let x = 0; x < maskCanvas.width; x++) {
+                const i = (y * maskCanvas.width + x) * 4;
+                if (isBlack(maskDataArray, x, y, maskCanvas.width)) {
+                    const averageColor = calculateWeightedAverage(x, y, boundaryPixels, imageData, maskCanvas.width, degreeValue);
+                    resultDataArray[i] = averageColor.r;
+                    resultDataArray[i + 1] = averageColor.g;
+                    resultDataArray[i + 2] = averageColor.b;
+                    resultDataArray[i + 3] = 255;
+                } else {
+                    resultDataArray[i] = data[i];
+                    resultDataArray[i + 1] = data[i + 1];
+                    resultDataArray[i + 2] = data[i + 2];
+                    resultDataArray[i + 3] = data[i + 3];
+                }
+            }
+        }
+
+        resultCanvas.width = imageCanvas.width;
+        resultCanvas.height = imageCanvas.height;
+        resultCtx.putImageData(resultData, 0, 0);
+    }
+
+    function findBoundaryPixels(maskData, width, height) {
+        const boundaryPixels = [];
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                if (!isBlack(maskData, x, y, width)) {
+                    if (isNeighborBlack(maskData, x, y, width)) {
+                        boundaryPixels.push({x, y});
+                    }
+                }
+            }
+        }
+        return boundaryPixels;
+    }
+
+    function isNeighborBlack(maskData, x, y, width) {
+        const neighbors = [
+            [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]
+        ];
+        for (const [nx, ny] of neighbors) {
+            if (isBlack(maskData, nx, ny, width)) return true;
+        }
+        return false;
+    }
+
+    function calculateWeightedAverage(x, y, boundaryPixels, imageData, width, degree) {
+        let totalR = 0, totalG = 0, totalB = 0;
+        let totalWeight = 0;
+
+        for (const {x: bx, y: by} of boundaryPixels) {
+            const distance = Math.sqrt((x - bx) ** 2 + (y - by) ** 2);
+            if (distance === 0) continue;
+            const weight = (1 / distance) ** degree;
+
+            const i = (by * width + bx) * 4;
+            totalR += imageData.data[i] * weight;
+            totalG += imageData.data[i + 1] * weight;
+            totalB += imageData.data[i + 2] * weight;
+            totalWeight += weight;
+        }
+
+        return totalWeight ? {
+            r: Math.floor(totalR / totalWeight),
+            g: Math.floor(totalG / totalWeight),
+            b: Math.floor(totalB / totalWeight)
+        } : {r: 0, g: 0, b: 0};
+    }
+
+    // Инструмент рисования по маске
+    let drawing = false;
+    let lastX = null;
+    let lastY = null;
+
+    maskCanvas.addEventListener('mousedown', (e) => {
+        drawing = true;
+        const rect = maskCanvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        lastX = x;
+        lastY = y;
+        drawOnMask(x, y);
+        //updateResult(); // Автообновление
+    });
+
+    maskCanvas.addEventListener('mousemove', (e) => {
+        const rect = maskCanvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const size = parseInt(brushSize.value) * 2;
+
+        cursorIndicator.style.left = x + 'px';
+        cursorIndicator.style.top = y + 'px';
+        cursorIndicator.style.width = size + 'px';
+        cursorIndicator.style.height = size + 'px';
+
+        if (drawing) {
+            drawOnMask(x, y);
+            // updateResult(); // Автообновление
+        }
+    });
+
+    maskCanvas.addEventListener('mouseup', () => {
+        drawing = false;
+        updateResult();
+        lastX = null;
+        lastY = null;
+    });
+
+    maskCanvas.addEventListener('mouseleave', () => {
+        cursorIndicator.style.display = 'none';
+    });
+    maskCanvas.addEventListener('mouseenter', () => {
+        cursorIndicator.style.display = 'block';
+    });
+
+    // maskCanvas.addEventListener('mouseleave', () => {
+    //     drawing = false;
+    // });
+
+    degree.addEventListener('change', updateResult);
+
+    brushSize.addEventListener('input', () => {
+        const size = parseInt(brushSize.value) * 2;
+        cursorIndicator.style.width = size + 'px';
+        cursorIndicator.style.height = size + 'px';
+    });
+
+    function drawOnMask(x, y) {
+        const ctx = maskCanvas.getContext('2d');
+        const size = parseInt(brushSize.value);
+        const radius = size;
+
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (tool.value === 'brush') {
+            ctx.strokeStyle = 'rgba(0,0,0,255)';
+            ctx.lineWidth = radius * 2;
+
+            if (lastX !== null && lastY !== null) {
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                ctx.lineTo(x, y);
+                ctx.stroke();
+            } else {
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(0,0,0,255)';
+                ctx.fill();
+            }
+        } else {
+            // Ластик
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.lineWidth = radius * 2;
+
+            if (lastX !== null && lastY !== null) {
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                ctx.lineTo(x, y);
+                ctx.stroke();
+            } else {
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            ctx.globalCompositeOperation = 'source-over';
+        }
+
+        lastX = x;
+        lastY = y;
+    }
+</script>
+</body>
+</html>
